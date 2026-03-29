@@ -1,0 +1,4 @@
+cd llama.cpp/build/bin/release
+.\llama-server.exe -m "C:\Users\Shubham Singh\llama.cpp\models\Mistral-7B-Instruct-v0.3-IQ3_M.gguf" -ngl 999
+.\llama-server.exe -m "C:\Users\Shubham Singh\llama.cpp\models\Mistral-7B-Instruct-v0.3.Q4_K_S.gguf" -ngl 999 -c 8192
+#loads all layers to the cpu
