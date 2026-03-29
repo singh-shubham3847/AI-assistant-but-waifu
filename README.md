@@ -22,6 +22,57 @@ A fully local AI waifu system featuring a 3D anime avatar, voice interaction, an
 
 ---
 
+## 🖥️ Minimum System Requirements
+
+### ⚙️ Bare Minimum (Will Run, Not Smooth)
+
+* **CPU:** 4 cores (e.g. Intel i5 8th gen / Ryzen 3)
+* **RAM:** 8 GB
+* **GPU:** Integrated graphics (Intel UHD / Vega)
+* **Storage:** ~5–10 GB free
+* **OS:** Windows / Linux
+* **Browser:** Chrome / Edge (WebGL required)
+
+👉 Expect:
+
+* Slow LLM responses
+* Slight lag in avatar
+* Lower FPS
+
+---
+
+### 🚀 Recommended (Smooth Experience)
+
+* **CPU:** 6–8 cores (e.g. Intel i5 12th gen / Ryzen 5)
+* **RAM:** 12–16 GB
+* **GPU:** Dedicated GPU (RTX 2050 or better)
+* **Storage:** SSD (important for model loading)
+* **VRAM:** 4 GB+ (if using GPU acceleration)
+
+👉 Expect:
+
+* Fast responses
+* Smooth animations
+* Better TTS quality
+
+---
+
+### 🔥 Ideal (Best Experience)
+
+* **CPU:** 8+ cores (i7 / Ryzen 7)
+* **RAM:** 16–32 GB
+* **GPU:** RTX 3060+
+* **VRAM:** 6–12 GB
+* **Storage:** NVMe SSD
+
+👉 Enables:
+
+* Larger LLM models
+* Real-time interaction
+* Advanced features (future upgrades)
+
+---
+
 ## 🏗️ Project Structure
 
 ```
