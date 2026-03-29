@@ -2,4 +2,4 @@ cd llama.cpp/build/bin/release
 .\llama-server.exe -m "C:\Users\Shubham Singh\llama.cpp\models\Mistral-7B-Instruct-v0.3-IQ3_M.gguf" -ngl 999
 .\llama-server.exe -m "C:\Users\Shubham Singh\llama.cpp\models\Mistral-7B-Instruct-v0.3.Q4_K_S.gguf" -ngl 999 -c 8192
 #loads all layers to the gpu
-use this file for reference for TTS: https://www.archive.org/download/anne_island_0811_librivox/anne_island_04_montgomery.mp3 (clean the voice before using for TTS, use UVR5 for cleaning)
+use this file for reference for TTS named as REFERENCE_BIG.wav : https://www.archive.org/download/anne_island_0811_librivox/anne_island_04_montgomery.mp3 (clean the voice before using for TTS, use UVR5 for cleaning)
