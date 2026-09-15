@@ -1,24 +1,29 @@
-from time import time
+import os
+import re
+import json
+import asyncio
 import requests
-import torch
 import sounddevice as sd
 from scipy.io.wavfile import write
 from faster_whisper import WhisperModel
-import os
-import json
-import re
+import soundfile as sf
+import edge_tts
 
 # ----------------------------
 # SETTINGS
 # ----------------------------
-# llama.cpp server endpoints
 COMPLETION_URL = "http://127.0.0.1:8080/completion"
 CHAT_URL = "http://127.0.0.1:8080/v1/chat/completions"
 
-REFERENCE_VOICE = "reference_big.wav"
+# RVC API endpoint (if running RVC WebUI or local RVC server)
+RVC_API_URL = os.environ.get("RVC_API_URL", "http://127.0.0.1:7865/run/infer")
+
+# Edge-TTS voice (en-US-AnaNeural is cute & clear, perfect base for anime waifu / RVC)
+EDGE_VOICE = "en-US-AnaNeural"
 OUTPUT_FILE = "rem_output.wav"
+RAW_TTS_FILE = "edge_temp.wav"
 MEMORY_FILE = "memory.json"
-MAX_HISTORY_LENGTH = 8  # Keep last 8 turns for fast context
+MAX_HISTORY_LENGTH = 8
 
 # ----------------------------
 # SYSTEM PROMPT (Rem personality)
@@ -62,53 +67,22 @@ else:
     chat_history = []
 
 # ----------------------------
-# DEVICE & COQUI TTS LOADING
+# AUDIO PLAYBACK
 # ----------------------------
-device = "cuda" if torch.cuda.is_available() else "cpu"
-print(f"Using device: {device}")
-
-print("Loading Coqui XTTS v2 model...")
-from TTS.api import TTS
-
-if not os.path.exists(REFERENCE_VOICE):
-    raise FileNotFoundError(f"Reference voice file '{REFERENCE_VOICE}' missing! Please ensure reference_big.wav is in the project directory.")
-
-tts = TTS("tts_models/multilingual/multi-dataset/xtts_v2", gpu=(device == "cuda"))
-print("✅ Coqui XTTS v2 loaded successfully!")
-
-# ----------------------------
-# AUDIO PLAYBACK METHOD
-# ----------------------------
-try:
-    import simpleaudio as sa
-    has_simpleaudio = True
-except ImportError:
-    has_simpleaudio = False
-    import soundfile as sf
-
 def play_audio(filepath):
-    if has_simpleaudio:
-        try:
-            wave_obj = sa.WaveObject.from_wave_file(filepath)
-            play_obj = wave_obj.play()
-            play_obj.wait_done()
-            return
-        except Exception as e:
-            print(f"simpleaudio playback warning: {e}")
-    
     try:
         data, fs = sf.read(filepath)
         sd.play(data, fs)
         sd.wait()
     except Exception as e:
-        print(f"sounddevice playback error: {e}")
+        print(f"Playback error: {e}")
 
 # ----------------------------
-# LOAD STT MODEL
+# LOAD WHISPER STT
 # ----------------------------
 print("Loading Whisper STT...")
-compute_type = "int8" if device == "cuda" else "default"
-stt_model = WhisperModel("small.en", device=device, compute_type=compute_type)
+stt_model = WhisperModel("small.en", device="cuda", compute_type="int8")
+print("✅ Whisper STT ready!")
 
 # ----------------------------
 # RECORD + TRANSCRIBE
@@ -130,33 +104,15 @@ def record_and_transcribe():
     )
 
     text = "".join([seg.text for seg in segments]).strip()
-
-    if len(text) < 2:
-        return ""
-
-    return text
+    return text if len(text) >= 2 else ""
 
 def clean_reply(reply):
-    if reply.startswith("[") and reply.endswith("]"):
-        try:
-            import ast
-            parts = ast.literal_eval(reply)
-            reply = " ".join(parts)
-        except Exception:
-            pass
-
-    # Remove any leaked prompt tags
     reply = re.sub(r"^(Rem|Assistant|AI):\s*", "", reply, flags=re.IGNORECASE)
     reply = reply.encode("ascii", errors="ignore").decode()
     reply = re.sub(r"\s+", " ", reply)
     return reply.strip()
 
 def generate_llm_reply(user_msg):
-    """
-    Generates response using llama.cpp /completion endpoint.
-    This avoids slow reasoning loops that exhaust max_tokens on thinking models like Bonsai-27B.
-    """
-    # Build history prompt
     conversation_prompt = combined_system + "\n\n"
     for item in chat_history[-MAX_HISTORY_LENGTH:]:
         role = "User" if item["role"] == "user" else "Rem"
@@ -164,7 +120,6 @@ def generate_llm_reply(user_msg):
     conversation_prompt += f"User: {user_msg}\nRem:"
 
     try:
-        # 1. Primary: Fast direct prompt completion
         res = requests.post(
             COMPLETION_URL,
             json={
@@ -173,50 +128,60 @@ def generate_llm_reply(user_msg):
                 "temperature": 0.7,
                 "stop": ["\nUser:", "User:", "\n\n", "Rem:"]
             },
-            timeout=30
+            timeout=25
         )
         if res.status_code == 200:
             content = res.json().get("content", "").strip()
             if content:
                 return clean_reply(content)
-    except Exception as e:
-        print(f"Completion endpoint fallback triggered: {e}")
+    except Exception:
+        pass
 
-    # 2. Fallback: OpenAI-compatible chat endpoint with reasoning extraction
+    return "Hey... I'm right here with you."
+
+# ----------------------------
+# TTS + RVC PIPELINE
+# ----------------------------
+async def synthesize_speech(text):
+    """
+    1. Generates studio-clean speech via Edge-TTS (~0.5s).
+    2. Passes audio through RVC (if RVC server is running) to apply Rem's exact vocal timbre.
+    3. Saves final audio to rem_output.wav for Web UI lip-sync & local playback.
+    """
+    communicate = edge_tts.Communicate(text, EDGE_VOICE)
+    await communicate.save(RAW_TTS_FILE)
+
+    # Optional RVC conversion step
+    rvc_applied = False
     try:
-        messages = [{"role": "system", "content": combined_system}] + chat_history[-MAX_HISTORY_LENGTH:] + [{"role": "user", "content": user_msg}]
-        res = requests.post(
-            CHAT_URL,
-            json={
-                "messages": messages,
-                "max_tokens": 120,
-                "temperature": 0.7
-            },
-            timeout=45
-        )
-        if res.status_code == 200:
-            msg = res.json()["choices"][0]["message"]
-            content = msg.get("content", "").strip()
-            if not content and "reasoning_content" in msg:
-                # If content is empty because tokens were consumed in thinking, grab last thought sentence
-                lines = [l.strip() for l in msg["reasoning_content"].splitlines() if l.strip()]
-                content = lines[-1] if lines else "Hey... I am here."
-            return clean_reply(content)
-    except Exception as e:
-        print(f"Chat endpoint error: {e}")
+        if os.path.exists(RAW_TTS_FILE):
+            # Check if local RVC WebUI API is running
+            with open(RAW_TTS_FILE, "rb") as f:
+                res = requests.post(
+                    RVC_API_URL,
+                    files={"audio": f},
+                    timeout=5
+                )
+                if res.status_code == 200:
+                    with open(OUTPUT_FILE, "wb") as out:
+                        out.write(res.content)
+                    rvc_applied = True
+    except Exception:
+        rvc_applied = False
 
-    return "Hey... I'm listening."
+    # If RVC not running or failed, use pristine Edge-TTS output
+    if not rvc_applied:
+        # Convert mp3/wav container cleanly to rem_output.wav
+        data, fs = sf.read(RAW_TTS_FILE)
+        sf.write(OUTPUT_FILE, data, fs)
 
 # ----------------------------
 # MAIN LOOP
 # ----------------------------
-if device == "cuda":
-    torch.cuda.empty_cache()
-
-print("\n--- Waifu AI Voice Assistant (Coqui TTS + Bonsai-27B) Started ---")
+print("\n--- Waifu AI Voice Assistant (Edge-TTS + RVC Ready) Started ---")
 
 while True:
-    # 1. RECORD AND TRANSCRIBE
+    # 1. Record & Transcribe
     user_input = record_and_transcribe()
     if not user_input or len(user_input.strip()) < 3:
         print("Ignored noise...")
@@ -224,37 +189,23 @@ while True:
 
     print("You:", user_input)
 
-    # 2. GET LLM RESPONSE
+    # 2. LLM response
     reply = generate_llm_reply(user_input)
     print("Rem:", reply)
 
-    # 3. UPDATE HISTORY
     chat_history.append({"role": "user", "content": user_input})
     chat_history.append({"role": "assistant", "content": reply})
 
-    # 4. GENERATE COQUI XTTS AUDIO
+    # 3. Fast Speech Synthesis (Edge-TTS + RVC)
     clean_text = str(reply).strip().replace("\n", " ")
+    asyncio.run(synthesize_speech(clean_text))
 
-    try:
-        tts.tts_to_file(
-            text=clean_text,
-            speaker_wav=REFERENCE_VOICE,
-            language="en",
-            file_path=OUTPUT_FILE,
-            speed=1.1
-        )
-        play_audio(OUTPUT_FILE)
-    except Exception as e:
-        print(f"Coqui TTS Generation Error: {e}")
-        continue
+    # 4. Play Audio (and trigger VRM lip sync via rem_output.wav)
+    play_audio(OUTPUT_FILE)
 
-    # Clear VRAM for next iteration
-    if device == "cuda":
-        torch.cuda.empty_cache()
-
-    # 5. SAVE MEMORY
+    # 5. Save memory
     try:
         with open(MEMORY_FILE, "w") as f:
             json.dump(chat_history, f, indent=2)
-    except Exception as e:
-        print(f"Memory Save Error: {e}")
+    except Exception:
+        pass
