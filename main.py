@@ -156,20 +156,25 @@ async def synthesize_speech(text):
     rvc_applied = False
     try:
         if os.path.exists(RAW_TTS_FILE):
+            print("Applying RVC voice conversion (Rem.pth)...")
             import subprocess
             res = subprocess.run(
                 [sys.executable, "rvc_bridge.py", RAW_TTS_FILE, OUTPUT_FILE, "Rem.pth"],
                 capture_output=True,
                 text=True,
-                timeout=15
+                timeout=45
             )
             if res.returncode == 0 and os.path.exists(OUTPUT_FILE):
                 rvc_applied = True
+                print("✅ RVC voice conversion applied successfully!")
+            else:
+                print("⚠️ RVC bridge error:", res.stderr)
     except Exception as e:
         print(f"RVC Bridge warning: {e}")
         rvc_applied = False
 
     if not rvc_applied:
+        print("Using Edge-TTS fallback audio.")
         data, fs = sf.read(RAW_TTS_FILE)
         sf.write(OUTPUT_FILE, data, fs)
 
