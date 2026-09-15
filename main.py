@@ -83,7 +83,7 @@ def play_audio(filepath):
 # ----------------------------
 print("Loading Whisper STT...")
 stt_model = WhisperModel("small.en", device="cuda", compute_type="int8")
-print("✅ Whisper STT ready!")
+print("[OK] Whisper STT ready!")
 
 # ----------------------------
 # RECORD + TRANSCRIBE
@@ -92,7 +92,7 @@ def record_and_transcribe():
     fs = 16000
     duration = 5
 
-    print("\n🎤 Speak (5 seconds)...")
+    print("\n[MIC] Speak (5 seconds)...")
     audio = sd.rec(int(duration * fs), samplerate=fs, channels=1)
     sd.wait()
 
@@ -118,26 +118,31 @@ def generate_llm_reply(user_msg):
     for item in chat_history[-MAX_HISTORY_LENGTH:]:
         role = "User" if item["role"] == "user" else "Rem"
         conversation_prompt += f"{role}: {item['content']}\n"
-    conversation_prompt += f"User: {user_msg}\nRem:"
+    # Pre-filling <think>\n</think> tells reasoning models like Bonsai to skip thinking and reply immediately
+    conversation_prompt += f"User: {user_msg}\nRem: <think>\n</think>\n"
 
     try:
         res = requests.post(
             COMPLETION_URL,
             json={
                 "prompt": conversation_prompt,
-                "n_predict": 60,
+                "n_predict": 80,
                 "temperature": 0.8,
                 "repeat_penalty": 1.15,
-                "stop": ["\nUser:", "User:", "\n\n", "Rem:"]
+                "stop": ["\nUser:", "User:", "Rem:"]
             },
-            timeout=25
+            timeout=35
         )
         if res.status_code == 200:
             content = res.json().get("content", "").strip()
-            if content:
+            # Filter out any leftover thinking tags
+            content = re.sub(r"<think>.*?</think>", "", content, flags=re.DOTALL).strip()
+            if content and content != "<think>":
                 return clean_reply(content)
-    except Exception:
-        pass
+            else:
+                print("LLM returned empty or thinking tag, attempting raw extraction...")
+    except Exception as e:
+        print(f"LLM request error: {e}")
 
     return "Hmm... I'm listening, tell me more."
 
@@ -166,9 +171,9 @@ async def synthesize_speech(text):
             )
             if res.returncode == 0 and os.path.exists(OUTPUT_FILE):
                 rvc_applied = True
-                print("✅ RVC voice conversion applied successfully!")
+                print("[OK] RVC voice conversion applied successfully!")
             else:
-                print("⚠️ RVC bridge error:", res.stderr)
+                print("[WARNING] RVC bridge error:", res.stderr)
     except Exception as e:
         print(f"RVC Bridge warning: {e}")
         rvc_applied = False
@@ -181,34 +186,35 @@ async def synthesize_speech(text):
 # ----------------------------
 # MAIN LOOP
 # ----------------------------
-print("\n--- Waifu AI Voice Assistant (Edge-TTS + RVC Ready) Started ---")
+if __name__ == "__main__":
+    print("\n--- Waifu AI Voice Assistant (Edge-TTS + RVC Ready) Started ---")
 
-while True:
-    # 1. Record & Transcribe
-    user_input = record_and_transcribe()
-    if not user_input or len(user_input.strip()) < 3:
-        print("Ignored noise...")
-        continue
+    while True:
+        # 1. Record & Transcribe
+        user_input = record_and_transcribe()
+        if not user_input or len(user_input.strip()) < 3:
+            print("Ignored noise...")
+            continue
 
-    print("You:", user_input)
+        print("You:", user_input)
 
-    # 2. LLM response
-    reply = generate_llm_reply(user_input)
-    print("Rem:", reply)
+        # 2. LLM response
+        reply = generate_llm_reply(user_input)
+        print("Rem:", reply)
 
-    chat_history.append({"role": "user", "content": user_input})
-    chat_history.append({"role": "assistant", "content": reply})
+        chat_history.append({"role": "user", "content": user_input})
+        chat_history.append({"role": "assistant", "content": reply})
 
-    # 3. Fast Speech Synthesis (Edge-TTS + RVC)
-    clean_text = str(reply).strip().replace("\n", " ")
-    asyncio.run(synthesize_speech(clean_text))
+        # 3. Fast Speech Synthesis (Edge-TTS + RVC)
+        clean_text = str(reply).strip().replace("\n", " ")
+        asyncio.run(synthesize_speech(clean_text))
 
-    # 4. Play Audio (and trigger VRM lip sync via rem_output.wav)
-    play_audio(OUTPUT_FILE)
+        # 4. Play Audio (and trigger VRM lip sync via rem_output.wav)
+        play_audio(OUTPUT_FILE)
 
-    # 5. Save memory
-    try:
-        with open(MEMORY_FILE, "w") as f:
-            json.dump(chat_history, f, indent=2)
-    except Exception:
-        pass
+        # 5. Save memory
+        try:
+            with open(MEMORY_FILE, "w") as f:
+                json.dump(chat_history, f, indent=2)
+        except Exception:
+            pass

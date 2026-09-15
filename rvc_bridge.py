@@ -5,11 +5,12 @@ import subprocess
 rvc_dir = r"C:\Users\Shubham\.gemini\antigravity\scratch\RVC20260718Nvidia"
 input_audio = os.path.abspath(sys.argv[1])
 output_audio = os.path.abspath(sys.argv[2])
-model_name = sys.argv[3] if len(sys.argv) > 3 else "Rem.pth"
+model_name = sys.argv[3] if len(sys.argv) > 3 else "Emilia.pth"
 
 weight_root = os.path.join(rvc_dir, "assets", "weights")
 rmvpe_root = os.path.join(rvc_dir, "assets", "rmvpe")
-index_path = os.path.join(rvc_dir, "logs", "Rem.index")
+model_stem = os.path.splitext(model_name)[0]
+index_path = os.path.join(rvc_dir, "logs", f"{model_stem}.index")
 if not os.path.exists(index_path):
     index_path = ""
 
