@@ -11,7 +11,7 @@ import re
 # ----------------------------
 # SETTINGS
 # ----------------------------
-LLAMA_URL = "http://localhost:8080/v1/chat/completions"
+LLAMA_URL = "http://127.0.0.1:8080/v1/chat/completions"
 REFERENCE_VOICE = "reference_big.wav"
 OUTPUT_FILE = "rem_output.wav"
 MEMORY_FILE = "memory.json"
@@ -158,7 +158,7 @@ def clean_reply(reply):
 if device == "cuda":
     torch.cuda.empty_cache()
 
-print("\n--- Waifu AI Voice Assistant (Coqui TTS) Started ---")
+print("\n--- Waifu AI Voice Assistant (Coqui TTS + Bonsai-27B) Started ---")
 
 while True:
     # 1. RECORD AND TRANSCRIBE
@@ -175,17 +175,18 @@ while True:
     # 3. BUILD RECENT MESSAGES PAYLOAD
     recent_messages = [chat_history[0]] + chat_history[-(MAX_HISTORY_LENGTH):]
 
-    # 4. GET LLM RESPONSE
+    # 4. GET LLM RESPONSE (Targeting Bonsai-27B / llama.cpp endpoint)
     try:
         payload = {
-            "model": "local-model",
+            "model": "Bonsai-27B-Q1_0",
             "messages": recent_messages,
             "temperature": 0.7,
             "max_tokens": 80,
+            "stop": ["User:", "\nUser", "User:"],
             "stream": False
         }
 
-        response = requests.post(LLAMA_URL, json=payload, timeout=15)
+        response = requests.post(LLAMA_URL, json=payload, timeout=60)
         response.raise_for_status()
 
         result = response.json()
