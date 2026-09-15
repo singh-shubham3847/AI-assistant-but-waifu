@@ -1,0 +1,10 @@
+*.wav
+memory.json
+input_mic.wav
+rem_output.wav
+__pycache__/
+*.pyc
+.env
+venv/
+.vscode/
+.idea/

@@ -1,5 +1,4 @@
 from time import time
-
 import requests
 import torch
 from TTS.api import TTS
@@ -9,6 +8,7 @@ from scipy.io.wavfile import write
 from faster_whisper import WhisperModel
 import os
 import json
+import re
 
 # ----------------------------
 # SETTINGS
@@ -17,6 +17,7 @@ LLAMA_URL = "http://localhost:8080/v1/chat/completions"
 REFERENCE_VOICE = "reference_big.wav"
 OUTPUT_FILE = "rem_output.wav"
 MEMORY_FILE = "memory.json"
+MAX_HISTORY_LENGTH = 10  # Maximum turns of conversation to send to LLM
 
 # ----------------------------
 # SYSTEM PROMPT (Rem personality)
@@ -48,9 +49,7 @@ Rem: Hey... nice to see you.
 
 User: how are you
 Rem: I'm okay... better now that you're here.
-
 """
-
 
 # ----------------------------
 # LOAD MEMORY
@@ -59,7 +58,7 @@ if os.path.exists(MEMORY_FILE):
     try:
         with open(MEMORY_FILE, "r") as f:
             chat_history = json.load(f)
-    except:
+    except Exception:
         chat_history = []
 else:
     chat_history = []
@@ -77,11 +76,12 @@ print(f"Using device: {device}")
 # LOAD MODELS
 # ----------------------------
 print("Loading XTTS...")
-tts = TTS("tts_models/multilingual/multi-dataset/xtts_v2", gpu=True)
-
+tts = TTS("tts_models/multilingual/multi-dataset/xtts_v2", gpu=(device == "cuda"))
 
 print("Loading Whisper STT...")
-stt_model = WhisperModel("small.en", device="cuda", compute_type="float16")
+# Use int8 compute type to save VRAM and increase speed on CUDA/CPU
+compute_type = "int8" if device == "cuda" else "default"
+stt_model = WhisperModel("small.en", device=device, compute_type=compute_type)
 
 # ----------------------------
 # RECORD + TRANSCRIBE
@@ -90,7 +90,7 @@ def record_and_transcribe():
     fs = 16000
     duration = 5
 
-    print("🎤 Speak...")
+    print("\n🎤 Speak (5 seconds)...")
     audio = sd.rec(int(duration * fs), samplerate=fs, channels=1)
     sd.wait()
 
@@ -109,8 +109,6 @@ def record_and_transcribe():
 
     return text
 
-import re
-
 def clean_reply(reply):
     # convert list-like string → normal sentence
     if reply.startswith("[") and reply.endswith("]"):
@@ -118,7 +116,7 @@ def clean_reply(reply):
             import ast
             parts = ast.literal_eval(reply)
             reply = " ".join(parts)
-        except:
+        except Exception:
             pass
 
     # remove weird unicode junk
@@ -129,53 +127,46 @@ def clean_reply(reply):
 
     return reply.strip()
 
-
 # ----------------------------
 # MAIN LOOP
 # ----------------------------
-# Clear CUDA cache to prevent OOM (Out of Memory) errors
 if device == "cuda":
     torch.cuda.empty_cache()
 
+print("\n--- Waifu AI Voice Assistant Started ---")
+
 while True:
-    # 2. RECORD AND TRANSCRIBE
+    # 1. RECORD AND TRANSCRIBE
     user_input = record_and_transcribe()
     if not user_input or len(user_input.strip()) < 3:
         print("Ignored noise...")
         continue
 
-
     print("You:", user_input)
     
-    # 3. BUILD CLEAN HISTORY (Fixes the 500 error)
-    # Combine system prompts into one string
-    
-    # Add new user input to history
+    # 2. ADD USER INPUT TO HISTORY
     chat_history.append({"role": "user", "content": user_input})
+
+    # 3. BUILD RECENT MESSAGES PAYLOAD (SLIDING WINDOW CONTEXT)
+    # Always include the system prompt first, followed by the last N messages
+    recent_messages = [chat_history[0]] + chat_history[-(MAX_HISTORY_LENGTH):]
 
     # 4. GET LLM RESPONSE
     try:
         payload = {
             "model": "local-model",
-            "messages": [
-                {"role": "system", "content": combined_system},
-                {"role": "user", "content": user_input}
-            ],
+            "messages": recent_messages,
             "temperature": 0.7,
             "max_tokens": 80,
             "stream": False
         }
 
-        response = requests.post(LLAMA_URL, json=payload)
-        print("RAW RESPONSE:", response.text)
-
-
+        response = requests.post(LLAMA_URL, json=payload, timeout=15)
         response.raise_for_status()
 
         result = response.json()
         reply = result['choices'][0]['message']['content']
         reply = clean_reply(reply)
-
 
     except Exception as e:
         print(f"LLM Error: {e}")
@@ -184,6 +175,7 @@ while True:
     print("Rem:", reply)
     chat_history.append({"role": "assistant", "content": reply})
 
+    # 5. GENERATE TTS AUDIO
     clean_text = str(reply).strip().replace("\n", " ")
 
     try:
@@ -192,24 +184,27 @@ while True:
             speaker_wav=REFERENCE_VOICE,
             language="en",
             file_path=OUTPUT_FILE,
-            speed = 1.1
+            speed=1.1
         )
     except Exception as e:
         print(f"TTS Error: {e}")
         continue
 
-    #6. LOCAL PLAYBACK
-    wave_obj = sa.WaveObject.from_wave_file(OUTPUT_FILE)
-    play_obj = wave_obj.play()
-    play_obj.wait_done()
-    
+    # 6. LOCAL AUDIO PLAYBACK
+    try:
+        wave_obj = sa.WaveObject.from_wave_file(OUTPUT_FILE)
+        play_obj = wave_obj.play()
+        play_obj.wait_done()
+    except Exception as e:
+        print(f"Audio Playback Error: {e}")
 
-    # Clear VRAM for the next turn on your LOQ
-    torch.cuda.empty_cache()
+    # Clear VRAM for next iteration
+    if device == "cuda":
+        torch.cuda.empty_cache()
 
-    # ----------------------------
-    # SAVE MEMORY
-    # ----------------------------
-
-    with open(MEMORY_FILE, "w") as f:
-        json.dump(chat_history, f, indent=2)
+    # 7. SAVE MEMORY
+    try:
+        with open(MEMORY_FILE, "w") as f:
+            json.dump(chat_history, f, indent=2)
+    except Exception as e:
+        print(f"Memory Save Error: {e}")
