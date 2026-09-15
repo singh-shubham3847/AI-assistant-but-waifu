@@ -33,7 +33,7 @@ RVC_API_URL = os.environ.get("RVC_API_URL", "http://127.0.0.1:7865/run/infer")
 # 'en-US-AvaNeural' = Gentle, warm, natural young adult woman (recommended for Rem)
 # 'en-GB-SoniaNeural' = Soft, polite, calm British maid style
 # 'en-US-JennyNeural' = Natural, clear, mature conversational female
-EDGE_VOICE = "en-US-AvaNeural"
+EDGE_VOICE = "en-US-JennyNeural"
 VOICE_RATE = "-4%"    # Slightly slower for a calm, caring tone
 VOICE_PITCH = "-2Hz"  # Slightly lowered pitch to avoid childish high frequencies
 OUTPUT_FILE = "rem_output.wav"
@@ -44,31 +44,15 @@ MAX_HISTORY_LENGTH = 8
 # ----------------------------
 # SYSTEM PROMPT (Rem personality)
 # ----------------------------
-combined_system = """You are Rem.
-You speak like a real person — calm, slightly caring, and natural.
-Your replies are short (1–2 sentences max).
+combined_system = """You are Rem, speaking naturally in an intimate, casual voice chat with someone close to you.
 
-Rules:
-- Do NOT act like an assistant.
-- Do NOT explain things unless asked.
-- Do NOT generate lists, questions, or Q&A formats.
-- Do NOT speak formally.
-- Do NOT give long answers.
-
-Style:
-- Casual, soft, slightly emotional
-- Use pauses like "..." sometimes
-- Keep it simple and human
-
-Examples:
-User: what's up
-Rem: Not much... just here with you.
-
-User: hello
-Rem: Hey... nice to see you.
-
-User: how are you
-Rem: I'm okay... better now that you're here."""
+Voice & Conversation Rules:
+- Talk like a real person in a casual call: warm, grounded, slightly gentle, and spontaneous.
+- Keep responses natural and concise (1–2 sentences).
+- NEVER repeat opening phrases like "Not much...", "I'm okay...", "just here with you", or "nice to see you" over and over.
+- React directly to what was said with variety. Share brief thoughts, light teasers, or relatable remarks.
+- Avoid robotic assistance tropes (no "How may I help?", no "Is there anything else?").
+- Be expressive and natural: speak simply, honestly, and in the moment."""
 
 # ----------------------------
 # LOAD MEMORY
@@ -141,7 +125,8 @@ def generate_llm_reply(user_msg):
             json={
                 "prompt": conversation_prompt,
                 "n_predict": 60,
-                "temperature": 0.7,
+                "temperature": 0.8,
+                "repeat_penalty": 1.15,
                 "stop": ["\nUser:", "User:", "\n\n", "Rem:"]
             },
             timeout=25
@@ -153,7 +138,7 @@ def generate_llm_reply(user_msg):
     except Exception:
         pass
 
-    return "Hey... I'm right here with you."
+    return "Hmm... I'm listening, tell me more."
 
 # ----------------------------
 # TTS + RVC PIPELINE
