@@ -65,36 +65,19 @@ if len(chat_history) == 0:
     chat_history.append({"role": "system", "content": combined_system})
 
 # ----------------------------
-# DEVICE & TTS SELECTION
+# DEVICE & COQUI TTS LOADING
 # ----------------------------
 device = "cuda" if torch.cuda.is_available() else "cpu"
 print(f"Using device: {device}")
 
-# Attempt loading Coqui XTTS v2 with automatic fallback to pyttsx3
-use_coqui_tts = False
-tts = None
-engine = None
+print("Loading Coqui XTTS v2 model...")
+from TTS.api import TTS
 
-try:
-    print("Loading Coqui XTTS v2...")
-    from TTS.api import TTS
-    tts = TTS("tts_models/multilingual/multi-dataset/xtts_v2", gpu=(device == "cuda"))
-    if not os.path.exists(REFERENCE_VOICE):
-        print(f"⚠️ Warning: {REFERENCE_VOICE} not found. Coqui TTS requires a reference voice.")
-    else:
-        use_coqui_tts = True
-        print("✅ Coqui XTTS v2 loaded successfully!")
-except Exception as e:
-    print(f"⚠️ Coqui TTS failed to initialize ({e}). Falling back to pyttsx3 offline TTS...")
-    import pyttsx3
-    engine = pyttsx3.init()
-    voices = engine.getProperty('voices')
-    for v in voices:
-        if 'female' in v.name.lower() or 'zira' in v.name.lower() or 'hazel' in v.name.lower():
-            engine.setProperty('voice', v.id)
-            break
-    engine.setProperty('rate', 150)
-    print("✅ Fallback pyttsx3 engine ready.")
+if not os.path.exists(REFERENCE_VOICE):
+    raise FileNotFoundError(f"Reference voice file '{REFERENCE_VOICE}' missing! Please ensure reference_big.wav is in the project directory.")
+
+tts = TTS("tts_models/multilingual/multi-dataset/xtts_v2", gpu=(device == "cuda"))
+print("✅ Coqui XTTS v2 loaded successfully!")
 
 # ----------------------------
 # AUDIO PLAYBACK METHOD
@@ -116,7 +99,6 @@ def play_audio(filepath):
         except Exception as e:
             print(f"simpleaudio playback warning: {e}")
     
-    # Fallback to sounddevice playback if simpleaudio is unavailable or errors out
     try:
         data, fs = sf.read(filepath)
         sd.play(data, fs)
@@ -176,7 +158,7 @@ def clean_reply(reply):
 if device == "cuda":
     torch.cuda.empty_cache()
 
-print("\n--- Waifu AI Voice Assistant Started ---")
+print("\n--- Waifu AI Voice Assistant (Coqui TTS) Started ---")
 
 while True:
     # 1. RECORD AND TRANSCRIBE
@@ -217,30 +199,21 @@ while True:
     print("Rem:", reply)
     chat_history.append({"role": "assistant", "content": reply})
 
-    # 5. GENERATE TTS AUDIO
+    # 5. GENERATE COQUI XTTS AUDIO
     clean_text = str(reply).strip().replace("\n", " ")
 
-    if use_coqui_tts and tts:
-        try:
-            tts.tts_to_file(
-                text=clean_text,
-                speaker_wav=REFERENCE_VOICE,
-                language="en",
-                file_path=OUTPUT_FILE,
-                speed=1.1
-            )
-            play_audio(OUTPUT_FILE)
-        except Exception as e:
-            print(f"Coqui TTS Error: {e}")
-            continue
-    elif engine:
-        try:
-            engine.save_to_file(clean_text, OUTPUT_FILE)
-            engine.runAndWait()
-            # pyttsx3 handles speech synthesis to OUTPUT_FILE
-        except Exception as e:
-            print(f"pyttsx3 TTS Error: {e}")
-            continue
+    try:
+        tts.tts_to_file(
+            text=clean_text,
+            speaker_wav=REFERENCE_VOICE,
+            language="en",
+            file_path=OUTPUT_FILE,
+            speed=1.1
+        )
+        play_audio(OUTPUT_FILE)
+    except Exception as e:
+        print(f"Coqui TTS Generation Error: {e}")
+        continue
 
     # Clear VRAM for next iteration
     if device == "cuda":
