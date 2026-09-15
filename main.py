@@ -1,3 +1,4 @@
+import sys
 import os
 import re
 import json
@@ -146,33 +147,29 @@ def generate_llm_reply(user_msg):
 async def synthesize_speech(text):
     """
     1. Generates studio-clean speech via Edge-TTS (~0.5s).
-    2. Passes audio through RVC (if RVC server is running) to apply Rem's exact vocal timbre.
+    2. Passes audio through RVC bridge (using Rem.pth voice model).
     3. Saves final audio to rem_output.wav for Web UI lip-sync & local playback.
     """
     communicate = edge_tts.Communicate(text, EDGE_VOICE, rate=VOICE_RATE, pitch=VOICE_PITCH)
     await communicate.save(RAW_TTS_FILE)
 
-    # Optional RVC conversion step
     rvc_applied = False
     try:
         if os.path.exists(RAW_TTS_FILE):
-            # Check if local RVC WebUI API is running
-            with open(RAW_TTS_FILE, "rb") as f:
-                res = requests.post(
-                    RVC_API_URL,
-                    files={"audio": f},
-                    timeout=5
-                )
-                if res.status_code == 200:
-                    with open(OUTPUT_FILE, "wb") as out:
-                        out.write(res.content)
-                    rvc_applied = True
-    except Exception:
+            import subprocess
+            res = subprocess.run(
+                [sys.executable, "rvc_bridge.py", RAW_TTS_FILE, OUTPUT_FILE, "Rem.pth"],
+                capture_output=True,
+                text=True,
+                timeout=15
+            )
+            if res.returncode == 0 and os.path.exists(OUTPUT_FILE):
+                rvc_applied = True
+    except Exception as e:
+        print(f"RVC Bridge warning: {e}")
         rvc_applied = False
 
-    # If RVC not running or failed, use pristine Edge-TTS output
     if not rvc_applied:
-        # Convert mp3/wav container cleanly to rem_output.wav
         data, fs = sf.read(RAW_TTS_FILE)
         sf.write(OUTPUT_FILE, data, fs)
 
