@@ -2,103 +2,147 @@ import * as THREE from "three";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 import { VRM, VRMLoaderPlugin, VRMUtils } from "@pixiv/three-vrm";
 
+// UI Status elements
+const statusDot = document.getElementById("status-dot");
+const statusText = document.getElementById("status-text");
+
+function updateStatus(text, active = false) {
+  if (statusText) statusText.innerText = text;
+  if (statusDot) {
+    if (active) statusDot.classList.add("active");
+    else statusDot.classList.remove("active");
+  }
+}
+
 // Scene
 const scene = new THREE.Scene();
 
 // Background
 const bgLoader = new THREE.TextureLoader();
-bgLoader.load("./bg.jpg", (texture) => {
-  const geometry = new THREE.PlaneGeometry(10, 6);
-  const material = new THREE.MeshBasicMaterial({ map: texture });
+bgLoader.load(
+  "./bg.jpg",
+  (texture) => {
+    const geometry = new THREE.PlaneGeometry(10, 6);
+    const material = new THREE.MeshBasicMaterial({ map: texture });
+    material.map.minFilter = THREE.LinearFilter;
+    material.map.magFilter = THREE.LinearFilter;
 
-  material.map.minFilter = THREE.LinearFilter;
-  material.map.magFilter = THREE.LinearFilter;
-
-  const bgMesh = new THREE.Mesh(geometry, material);
-  bgMesh.position.set(0, 1, -5);
-  scene.add(bgMesh);
-});
+    const bgMesh = new THREE.Mesh(geometry, material);
+    bgMesh.position.set(0, 1, -5);
+    scene.add(bgMesh);
+  },
+  undefined,
+  (err) => {
+    console.warn("Background image bg.jpg not found, using default background.");
+  }
+);
 
 // Camera
-const camera = new THREE.PerspectiveCamera(30, window.innerWidth / window.innerHeight, 0.01, 1000);
-camera.position.set(0, 1, 3);
-camera.lookAt(0, 0.8, 0);
+const camera = new THREE.PerspectiveCamera(
+  30,
+  window.innerWidth / window.innerHeight,
+  0.01,
+  1000
+);
+camera.position.set(0, 1.3, 2.5);
+camera.lookAt(0, 1.1, 0);
 
 // Renderer
-const renderer = new THREE.WebGLRenderer({ antialias: true });
+const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
 renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 document.body.appendChild(renderer.domElement);
 
 // Lighting
-scene.add(new THREE.AmbientLight(0xffffff, 0.8));
-const light = new THREE.DirectionalLight(0xffffff, 1);
-light.position.set(1, 1, 1);
-scene.add(light);
+scene.add(new THREE.AmbientLight(0xffffff, 1.0));
+const dirLight = new THREE.DirectionalLight(0xffffff, 1.2);
+dirLight.position.set(1, 2, 1);
+scene.add(dirLight);
 
-// Audio detection
+// Audio / Lip sync state
 let isTalking = false;
 let talkTimer = 0;
 let lastSize = 0;
 
 async function detectTalking() {
   try {
-    const res = await fetch("./rem_output.wav?cache=" + Date.now());
-    const blob = await res.blob();
+    const res = await fetch("./rem_output.wav?cache=" + Date.now(), { method: "HEAD" });
+    if (!res.ok) return;
 
-    if (blob.size > 2000 && blob.size !== lastSize) {
-      lastSize = blob.size;
-      isTalking = true;
-      talkTimer = 0;
+    const contentLength = res.headers.get("Content-Length");
+    if (contentLength) {
+      const size = parseInt(contentLength, 10);
+      if (size > 2000 && size !== lastSize) {
+        lastSize = size;
+        isTalking = true;
+        talkTimer = 0;
+        updateStatus("Rem Speaking...", true);
+      }
     }
-  } catch {}
+  } catch (e) {
+    // Ignore fetch errors during idle
+  }
 }
 
-setInterval(detectTalking, 1000);
+setInterval(detectTalking, 800);
 
-// Loader
+// VRM Loader
 const loader = new GLTFLoader();
 loader.register((parser) => new VRMLoaderPlugin(parser));
 
 let currentVrm = null;
 let baseVrmY = 0;
 
-loader.load("./model.vrm", (gltf) => {
-  VRMUtils.removeUnnecessaryVertices(gltf.scene);
-  VRMUtils.removeUnnecessaryJoints(gltf.scene);
+updateStatus("Loading 3D Waifu Avatar...", false);
 
-  currentVrm = gltf.userData.vrm;
-  scene.add(currentVrm.scene);
+loader.load(
+  "./model.vrm",
+  (gltf) => {
+    VRMUtils.removeUnnecessaryVertices(gltf.scene);
+    VRMUtils.removeUnnecessaryJoints(gltf.scene);
 
-  currentVrm.scene.rotation.y = Math.PI;
+    currentVrm = gltf.userData.vrm;
+    scene.add(currentVrm.scene);
 
-  const bbox = new THREE.Box3().setFromObject(currentVrm.scene);
-  const minY = bbox.min.y;
-  currentVrm.scene.position.y -= minY;
-  baseVrmY = currentVrm.scene.position.y;
+    currentVrm.scene.rotation.y = Math.PI;
 
-  const humanoid = currentVrm.humanoid;
+    const bbox = new THREE.Box3().setFromObject(currentVrm.scene);
+    const minY = bbox.min.y;
+    currentVrm.scene.position.y -= minY;
+    baseVrmY = currentVrm.scene.position.y;
 
-  const lArm = humanoid.getNormalizedBoneNode("leftUpperArm");
-  const rArm = humanoid.getNormalizedBoneNode("rightUpperArm");
-  if (lArm) lArm.rotation.z = 1.0;
-  if (rArm) rArm.rotation.z = -1.0;
+    // Adjust arms to natural pose
+    const humanoid = currentVrm.humanoid;
+    if (humanoid) {
+      const lArm = humanoid.getNormalizedBoneNode("leftUpperArm");
+      const rArm = humanoid.getNormalizedBoneNode("rightUpperArm");
+      if (lArm) lArm.rotation.z = 1.0;
+      if (rArm) rArm.rotation.z = -1.0;
 
-  const lLower = humanoid.getNormalizedBoneNode("leftLowerArm");
-  const rLower = humanoid.getNormalizedBoneNode("rightLowerArm");
-  if (lLower) lLower.rotation.z = 0.5;
-  if (rLower) rLower.rotation.z = -0.5;
+      const lLower = humanoid.getNormalizedBoneNode("leftLowerArm");
+      const rLower = humanoid.getNormalizedBoneNode("rightLowerArm");
+      if (lLower) lLower.rotation.z = 0.5;
+      if (rLower) rLower.rotation.z = -0.5;
+    }
 
-  currentVrm.scene.traverse((obj) => (obj.frustumCulled = false));
+    currentVrm.scene.traverse((obj) => (obj.frustumCulled = false));
 
-  console.log("Mouth keys:", currentVrm.expressionManager?.mouthExpressionNames);
-  console.log("Mouth keys FULL:", currentVrm.expressionManager.mouthExpressionNames);
+    console.log("VRM Model Loaded Successfully!");
+    updateStatus("Rem Online", true);
+  },
+  (progress) => {
+    if (progress.total > 0) {
+      const pct = Math.round((progress.loaded / progress.total) * 100);
+      updateStatus(`Loading Avatar (${pct}%)...`, false);
+    }
+  },
+  (error) => {
+    console.error("Error loading VRM model:", error);
+    updateStatus("Failed to load model.vrm", false);
+  }
+);
 
-  const map = currentVrm.expressionManager._expressionMap;
-  console.log("Expression Map:", Object.keys(map));
-
-});
-
-// Blink
+// Blinking logic
 let blinkTimer = 0;
 let isBlinking = false;
 let blinkInterval = 2.8 + Math.random() * 2.4;
@@ -108,38 +152,42 @@ function setBlink(v) {
   if (!currentVrm || !currentVrm.expressionManager) return;
   try {
     currentVrm.expressionManager.setValue("blink", v);
-  } catch {}
+  } catch (e) {}
 }
 
-// ✅ FIXED MOUTH FUNCTION (OUTSIDE animate)
+// Lip sync mouth expression logic
 function setMouth(v) {
   if (!currentVrm || !currentVrm.expressionManager) return;
 
   const exp = currentVrm.expressionManager;
-
-  const map = exp._expressionMap;
-
-  if (!map) return;
-
-  Object.keys(map).forEach((key) => {
-    // only target mouth-related expressions
-    if (key.toLowerCase().includes("mouth") || 
-        key.toLowerCase().includes("aa") || 
-        key.toLowerCase().includes("oh") || 
-        key.toLowerCase().includes("ih")) {
-
-      try {
-        exp.setValue(key, v);
-      } catch {}
+  try {
+    // Try standard VRM 1.0 / 0.x expression keys
+    exp.setValue("aa", v);
+    exp.setValue("oh", v * 0.5);
+  } catch (e) {
+    // Fallback: search expression map dynamically
+    const map = exp._expressionMap;
+    if (map) {
+      Object.keys(map).forEach((key) => {
+        if (
+          key.toLowerCase().includes("mouth") ||
+          key.toLowerCase().includes("aa") ||
+          key.toLowerCase().includes("oh") ||
+          key.toLowerCase().includes("ih")
+        ) {
+          try {
+            exp.setValue(key, v);
+          } catch (err) {}
+        }
+      });
     }
-  });
+  }
 
   exp.update();
 }
 
-
-// Animation
-let clock = new THREE.Clock();
+// Animation loop
+const clock = new THREE.Clock();
 let idleTimer = 0;
 let idleState = "normal";
 
@@ -151,11 +199,10 @@ function animate() {
   if (currentVrm) {
     const t = clock.elapsedTime;
 
-    // breathing
-    currentVrm.scene.position.y =
-      baseVrmY + Math.sin(t * 1.4) * 0.0008;
+    // Subtle breathing animation
+    currentVrm.scene.position.y = baseVrmY + Math.sin(t * 1.4) * 0.0008;
 
-    // idle state
+    // Idle state transitions
     idleTimer += delta;
     if (idleTimer > 6) {
       idleTimer = 0;
@@ -163,31 +210,27 @@ function animate() {
       idleState = states[Math.floor(Math.random() * states.length)];
     }
 
-    // head
-    const head = currentVrm.humanoid.getNormalizedBoneNode("head");
-
+    // Head rotation
+    const head = currentVrm.humanoid?.getNormalizedBoneNode("head");
     if (head) {
       if (idleState === "normal") {
         head.rotation.x = Math.sin(t * 0.8) * 0.03;
         head.rotation.y = Math.sin(t * 0.5) * 0.05;
-      }
-      if (idleState === "look") {
+      } else if (idleState === "look") {
         head.rotation.y = Math.sin(t * 0.4) * 0.25;
-      }
-      if (idleState === "shy") {
+      } else if (idleState === "shy") {
         head.rotation.x = 0.15;
         head.rotation.y = -0.4;
       }
     }
 
-    // body turn
-    currentVrm.scene.rotation.y =
-      Math.PI + Math.sin(t * 0.25) * 0.2;
+    // Body idle sway
+    currentVrm.scene.rotation.y = Math.PI + Math.sin(t * 0.25) * 0.15;
 
-    currentVrm.humanoid.update();
+    if (currentVrm.humanoid) currentVrm.humanoid.update();
     currentVrm.update(delta);
 
-    // blinking
+    // Blinking updates
     if (!isBlinking) {
       blinkTimer += delta;
       setBlink(0);
@@ -202,24 +245,25 @@ function animate() {
       if (blinkTimer > blinkDuration) {
         isBlinking = false;
         blinkTimer = 0;
+        blinkInterval = 2.8 + Math.random() * 2.4;
       }
     }
 
-    // 🗣️ LIP SYNC
+    // Lip sync updates
     if (isTalking) {
       talkTimer += delta;
 
       let mouth =
-        Math.abs(Math.sin(t * 9)) * 2 +
-        Math.abs(Math.sin(t * 5)) * 3 +
-        Math.random() * 3;
+        Math.abs(Math.sin(t * 10)) * 0.5 +
+        Math.abs(Math.sin(t * 6)) * 0.4 +
+        Math.random() * 0.2;
 
-      mouth = Math.min(Math.pow(mouth, 0.7) * 2.8, 1);
-
+      mouth = Math.min(mouth * 1.2, 1.0);
       setMouth(mouth);
 
-      if (talkTimer > 5) {
+      if (talkTimer > 4.5) {
         isTalking = false;
+        updateStatus("Rem Online", true);
       }
     } else {
       setMouth(0);
@@ -231,7 +275,7 @@ function animate() {
 
 animate();
 
-// Resize
+// Responsive window resize
 window.addEventListener("resize", () => {
   camera.aspect = window.innerWidth / window.innerHeight;
   camera.updateProjectionMatrix();

@@ -1,13 +1,46 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-  <title>Waifu</title>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Rem AI Waifu</title>
 
   <style>
+    * {
+      box-sizing: border-box;
+    }
     body {
       margin: 0;
       overflow: hidden;
-      background: black;
+      background: #0d0d11;
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    }
+    #status-overlay {
+      position: absolute;
+      top: 20px;
+      left: 20px;
+      background: rgba(13, 13, 17, 0.75);
+      backdrop-filter: blur(8px);
+      border: 1px solid rgba(255, 255, 255, 0.15);
+      padding: 12px 18px;
+      border-radius: 12px;
+      color: #e0e0e0;
+      font-size: 14px;
+      box-shadow: 0 4px 20px rgba(0,0,0,0.4);
+      pointer-events: none;
+      z-index: 10;
+    }
+    .status-indicator {
+      display: inline-block;
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      background: #ff4757;
+      margin-right: 8px;
+    }
+    .status-indicator.active {
+      background: #2ed573;
+      box-shadow: 0 0 8px #2ed573;
     }
   </style>
 
@@ -23,6 +56,11 @@
 </head>
 
 <body>
-  <script type="module" src="./main.js"></script>
+  <div id="status-overlay">
+    <span id="status-dot" class="status-indicator"></span>
+    <span id="status-text">Loading VRM Model...</span>
+  </div>
+
+  <script type="module" src="./script.js"></script>
 </body>
 </html>
