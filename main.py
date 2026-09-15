@@ -1,8 +1,6 @@
 from time import time
 import requests
 import torch
-from TTS.api import TTS
-import simpleaudio as sa
 import sounddevice as sd
 from scipy.io.wavfile import write
 from faster_whisper import WhisperModel
@@ -67,19 +65,69 @@ if len(chat_history) == 0:
     chat_history.append({"role": "system", "content": combined_system})
 
 # ----------------------------
-# DEVICE
+# DEVICE & TTS SELECTION
 # ----------------------------
 device = "cuda" if torch.cuda.is_available() else "cpu"
 print(f"Using device: {device}")
 
-# ----------------------------
-# LOAD MODELS
-# ----------------------------
-print("Loading XTTS...")
-tts = TTS("tts_models/multilingual/multi-dataset/xtts_v2", gpu=(device == "cuda"))
+# Attempt loading Coqui XTTS v2 with automatic fallback to pyttsx3
+use_coqui_tts = False
+tts = None
+engine = None
 
+try:
+    print("Loading Coqui XTTS v2...")
+    from TTS.api import TTS
+    tts = TTS("tts_models/multilingual/multi-dataset/xtts_v2", gpu=(device == "cuda"))
+    if not os.path.exists(REFERENCE_VOICE):
+        print(f"⚠️ Warning: {REFERENCE_VOICE} not found. Coqui TTS requires a reference voice.")
+    else:
+        use_coqui_tts = True
+        print("✅ Coqui XTTS v2 loaded successfully!")
+except Exception as e:
+    print(f"⚠️ Coqui TTS failed to initialize ({e}). Falling back to pyttsx3 offline TTS...")
+    import pyttsx3
+    engine = pyttsx3.init()
+    voices = engine.getProperty('voices')
+    for v in voices:
+        if 'female' in v.name.lower() or 'zira' in v.name.lower() or 'hazel' in v.name.lower():
+            engine.setProperty('voice', v.id)
+            break
+    engine.setProperty('rate', 150)
+    print("✅ Fallback pyttsx3 engine ready.")
+
+# ----------------------------
+# AUDIO PLAYBACK METHOD
+# ----------------------------
+try:
+    import simpleaudio as sa
+    has_simpleaudio = True
+except ImportError:
+    has_simpleaudio = False
+    import soundfile as sf
+
+def play_audio(filepath):
+    if has_simpleaudio:
+        try:
+            wave_obj = sa.WaveObject.from_wave_file(filepath)
+            play_obj = wave_obj.play()
+            play_obj.wait_done()
+            return
+        except Exception as e:
+            print(f"simpleaudio playback warning: {e}")
+    
+    # Fallback to sounddevice playback if simpleaudio is unavailable or errors out
+    try:
+        data, fs = sf.read(filepath)
+        sd.play(data, fs)
+        sd.wait()
+    except Exception as e:
+        print(f"sounddevice playback error: {e}")
+
+# ----------------------------
+# LOAD STT MODEL
+# ----------------------------
 print("Loading Whisper STT...")
-# Use int8 compute type to save VRAM and increase speed on CUDA/CPU
 compute_type = "int8" if device == "cuda" else "default"
 stt_model = WhisperModel("small.en", device=device, compute_type=compute_type)
 
@@ -110,7 +158,6 @@ def record_and_transcribe():
     return text
 
 def clean_reply(reply):
-    # convert list-like string → normal sentence
     if reply.startswith("[") and reply.endswith("]"):
         try:
             import ast
@@ -119,12 +166,8 @@ def clean_reply(reply):
         except Exception:
             pass
 
-    # remove weird unicode junk
     reply = reply.encode("ascii", errors="ignore").decode()
-
-    # remove extra spaces
     reply = re.sub(r"\s+", " ", reply)
-
     return reply.strip()
 
 # ----------------------------
@@ -147,8 +190,7 @@ while True:
     # 2. ADD USER INPUT TO HISTORY
     chat_history.append({"role": "user", "content": user_input})
 
-    # 3. BUILD RECENT MESSAGES PAYLOAD (SLIDING WINDOW CONTEXT)
-    # Always include the system prompt first, followed by the last N messages
+    # 3. BUILD RECENT MESSAGES PAYLOAD
     recent_messages = [chat_history[0]] + chat_history[-(MAX_HISTORY_LENGTH):]
 
     # 4. GET LLM RESPONSE
@@ -178,31 +220,33 @@ while True:
     # 5. GENERATE TTS AUDIO
     clean_text = str(reply).strip().replace("\n", " ")
 
-    try:
-        tts.tts_to_file(
-            text=clean_text,
-            speaker_wav=REFERENCE_VOICE,
-            language="en",
-            file_path=OUTPUT_FILE,
-            speed=1.1
-        )
-    except Exception as e:
-        print(f"TTS Error: {e}")
-        continue
-
-    # 6. LOCAL AUDIO PLAYBACK
-    try:
-        wave_obj = sa.WaveObject.from_wave_file(OUTPUT_FILE)
-        play_obj = wave_obj.play()
-        play_obj.wait_done()
-    except Exception as e:
-        print(f"Audio Playback Error: {e}")
+    if use_coqui_tts and tts:
+        try:
+            tts.tts_to_file(
+                text=clean_text,
+                speaker_wav=REFERENCE_VOICE,
+                language="en",
+                file_path=OUTPUT_FILE,
+                speed=1.1
+            )
+            play_audio(OUTPUT_FILE)
+        except Exception as e:
+            print(f"Coqui TTS Error: {e}")
+            continue
+    elif engine:
+        try:
+            engine.save_to_file(clean_text, OUTPUT_FILE)
+            engine.runAndWait()
+            # pyttsx3 handles speech synthesis to OUTPUT_FILE
+        except Exception as e:
+            print(f"pyttsx3 TTS Error: {e}")
+            continue
 
     # Clear VRAM for next iteration
     if device == "cuda":
         torch.cuda.empty_cache()
 
-    # 7. SAVE MEMORY
+    # 6. SAVE MEMORY
     try:
         with open(MEMORY_FILE, "w") as f:
             json.dump(chat_history, f, indent=2)
