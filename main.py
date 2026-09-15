@@ -11,18 +11,19 @@ import re
 # ----------------------------
 # SETTINGS
 # ----------------------------
-LLAMA_URL = "http://127.0.0.1:8080/v1/chat/completions"
+# llama.cpp server endpoints
+COMPLETION_URL = "http://127.0.0.1:8080/completion"
+CHAT_URL = "http://127.0.0.1:8080/v1/chat/completions"
+
 REFERENCE_VOICE = "reference_big.wav"
 OUTPUT_FILE = "rem_output.wav"
 MEMORY_FILE = "memory.json"
-MAX_HISTORY_LENGTH = 10  # Maximum turns of conversation to send to LLM
+MAX_HISTORY_LENGTH = 8  # Keep last 8 turns for fast context
 
 # ----------------------------
 # SYSTEM PROMPT (Rem personality)
 # ----------------------------
-combined_system = """
-You are Rem.
-
+combined_system = """You are Rem.
 You speak like a real person — calm, slightly caring, and natural.
 Your replies are short (1–2 sentences max).
 
@@ -46,8 +47,7 @@ User: hello
 Rem: Hey... nice to see you.
 
 User: how are you
-Rem: I'm okay... better now that you're here.
-"""
+Rem: I'm okay... better now that you're here."""
 
 # ----------------------------
 # LOAD MEMORY
@@ -60,9 +60,6 @@ if os.path.exists(MEMORY_FILE):
         chat_history = []
 else:
     chat_history = []
-
-if len(chat_history) == 0:
-    chat_history.append({"role": "system", "content": combined_system})
 
 # ----------------------------
 # DEVICE & COQUI TTS LOADING
@@ -148,9 +145,67 @@ def clean_reply(reply):
         except Exception:
             pass
 
+    # Remove any leaked prompt tags
+    reply = re.sub(r"^(Rem|Assistant|AI):\s*", "", reply, flags=re.IGNORECASE)
     reply = reply.encode("ascii", errors="ignore").decode()
     reply = re.sub(r"\s+", " ", reply)
     return reply.strip()
+
+def generate_llm_reply(user_msg):
+    """
+    Generates response using llama.cpp /completion endpoint.
+    This avoids slow reasoning loops that exhaust max_tokens on thinking models like Bonsai-27B.
+    """
+    # Build history prompt
+    conversation_prompt = combined_system + "\n\n"
+    for item in chat_history[-MAX_HISTORY_LENGTH:]:
+        role = "User" if item["role"] == "user" else "Rem"
+        conversation_prompt += f"{role}: {item['content']}\n"
+    conversation_prompt += f"User: {user_msg}\nRem:"
+
+    try:
+        # 1. Primary: Fast direct prompt completion
+        res = requests.post(
+            COMPLETION_URL,
+            json={
+                "prompt": conversation_prompt,
+                "n_predict": 60,
+                "temperature": 0.7,
+                "stop": ["\nUser:", "User:", "\n\n", "Rem:"]
+            },
+            timeout=30
+        )
+        if res.status_code == 200:
+            content = res.json().get("content", "").strip()
+            if content:
+                return clean_reply(content)
+    except Exception as e:
+        print(f"Completion endpoint fallback triggered: {e}")
+
+    # 2. Fallback: OpenAI-compatible chat endpoint with reasoning extraction
+    try:
+        messages = [{"role": "system", "content": combined_system}] + chat_history[-MAX_HISTORY_LENGTH:] + [{"role": "user", "content": user_msg}]
+        res = requests.post(
+            CHAT_URL,
+            json={
+                "messages": messages,
+                "max_tokens": 120,
+                "temperature": 0.7
+            },
+            timeout=45
+        )
+        if res.status_code == 200:
+            msg = res.json()["choices"][0]["message"]
+            content = msg.get("content", "").strip()
+            if not content and "reasoning_content" in msg:
+                # If content is empty because tokens were consumed in thinking, grab last thought sentence
+                lines = [l.strip() for l in msg["reasoning_content"].splitlines() if l.strip()]
+                content = lines[-1] if lines else "Hey... I am here."
+            return clean_reply(content)
+    except Exception as e:
+        print(f"Chat endpoint error: {e}")
+
+    return "Hey... I'm listening."
 
 # ----------------------------
 # MAIN LOOP
@@ -168,39 +223,16 @@ while True:
         continue
 
     print("You:", user_input)
-    
-    # 2. ADD USER INPUT TO HISTORY
-    chat_history.append({"role": "user", "content": user_input})
 
-    # 3. BUILD RECENT MESSAGES PAYLOAD
-    recent_messages = [chat_history[0]] + chat_history[-(MAX_HISTORY_LENGTH):]
-
-    # 4. GET LLM RESPONSE (Targeting Bonsai-27B / llama.cpp endpoint)
-    try:
-        payload = {
-            "model": "Bonsai-27B-Q1_0",
-            "messages": recent_messages,
-            "temperature": 0.7,
-            "max_tokens": 80,
-            "stop": ["User:", "\nUser", "User:"],
-            "stream": False
-        }
-
-        response = requests.post(LLAMA_URL, json=payload, timeout=60)
-        response.raise_for_status()
-
-        result = response.json()
-        reply = result['choices'][0]['message']['content']
-        reply = clean_reply(reply)
-
-    except Exception as e:
-        print(f"LLM Error: {e}")
-        continue
-
+    # 2. GET LLM RESPONSE
+    reply = generate_llm_reply(user_input)
     print("Rem:", reply)
+
+    # 3. UPDATE HISTORY
+    chat_history.append({"role": "user", "content": user_input})
     chat_history.append({"role": "assistant", "content": reply})
 
-    # 5. GENERATE COQUI XTTS AUDIO
+    # 4. GENERATE COQUI XTTS AUDIO
     clean_text = str(reply).strip().replace("\n", " ")
 
     try:
@@ -220,7 +252,7 @@ while True:
     if device == "cuda":
         torch.cuda.empty_cache()
 
-    # 6. SAVE MEMORY
+    # 5. SAVE MEMORY
     try:
         with open(MEMORY_FILE, "w") as f:
             json.dump(chat_history, f, indent=2)
