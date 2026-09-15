@@ -5,9 +5,20 @@ import asyncio
 import requests
 import sounddevice as sd
 from scipy.io.wavfile import write
-from faster_whisper import WhisperModel
 import soundfile as sf
 import edge_tts
+
+# Register CUDA DLL directory from PyTorch so ctranslate2 / faster-whisper can find cublas64_12.dll
+try:
+    import torch
+    torch_lib = os.path.join(os.path.dirname(torch.__file__), "lib")
+    if os.path.exists(torch_lib):
+        os.add_dll_directory(torch_lib)
+        os.environ["PATH"] = torch_lib + os.pathsep + os.environ.get("PATH", "")
+except Exception:
+    pass
+
+from faster_whisper import WhisperModel
 
 # ----------------------------
 # SETTINGS
