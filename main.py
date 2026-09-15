@@ -29,8 +29,13 @@ CHAT_URL = "http://127.0.0.1:8080/v1/chat/completions"
 # RVC API endpoint (if running RVC WebUI or local RVC server)
 RVC_API_URL = os.environ.get("RVC_API_URL", "http://127.0.0.1:7865/run/infer")
 
-# Edge-TTS voice (en-US-AnaNeural is cute & clear, perfect base for anime waifu / RVC)
-EDGE_VOICE = "en-US-AnaNeural"
+# Edge-TTS voice settings
+# 'en-US-AvaNeural' = Gentle, warm, natural young adult woman (recommended for Rem)
+# 'en-GB-SoniaNeural' = Soft, polite, calm British maid style
+# 'en-US-JennyNeural' = Natural, clear, mature conversational female
+EDGE_VOICE = "en-US-AvaNeural"
+VOICE_RATE = "-4%"    # Slightly slower for a calm, caring tone
+VOICE_PITCH = "-2Hz"  # Slightly lowered pitch to avoid childish high frequencies
 OUTPUT_FILE = "rem_output.wav"
 RAW_TTS_FILE = "edge_temp.wav"
 MEMORY_FILE = "memory.json"
@@ -159,7 +164,7 @@ async def synthesize_speech(text):
     2. Passes audio through RVC (if RVC server is running) to apply Rem's exact vocal timbre.
     3. Saves final audio to rem_output.wav for Web UI lip-sync & local playback.
     """
-    communicate = edge_tts.Communicate(text, EDGE_VOICE)
+    communicate = edge_tts.Communicate(text, EDGE_VOICE, rate=VOICE_RATE, pitch=VOICE_PITCH)
     await communicate.save(RAW_TTS_FILE)
 
     # Optional RVC conversion step
